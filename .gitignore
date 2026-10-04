@@ -1,0 +1,20 @@
+# Keep only the current application, tests and setup documentation.
+# Environments, backups, media, reports, data and legacy code stay local.
+/*
+!/.gitignore
+!/Main.py
+!/crawler_ui.py
+!/crawler_controller.py
+!/agen.py
+!/env.py
+!/servo.py
+!/read_maker.py
+!/gen_aruco.py
+!/requirements.txt
+!/README.md
+!/UI_ARCHITECTURE.md
+!/tests/
+/tests/*
+!/tests/test_*.py
+__pycache__/
+*.py[cod]

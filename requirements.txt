@@ -1,0 +1,5 @@
+numpy==2.2.5
+opencv-contrib-python==4.11.0.86
+Pillow==11.2.1
+paho-mqtt==2.1.0
+openpyxl==3.1.5
