@@ -1,5 +1,6 @@
 import sys
 import time
+import threading
 import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -12,6 +13,7 @@ import tkinter as tk
 from crawler_controller import CrawlerController
 from crawler_ui import CrawlerUI
 from read_maker import ArucoTracker
+from servo import controlServo
 
 
 def marker_test_frame():
@@ -28,6 +30,8 @@ def marker_test_frame():
 class RefactorTests(unittest.TestCase):
     def setUp(self):
         self.ui = Mock()
+        self.ui.get_robot_count.return_value = 2
+        self.ui.get_single_robot_id.return_value = 1
         self.tracker = Mock(target_ids=[1, 2])
         self.tracker.get_distance.return_value = {2: -2.0, 1: 3.0}
         self.client = Mock()
@@ -59,6 +63,99 @@ class RefactorTests(unittest.TestCase):
             c.appRun()
         self.assertEqual(len(c.learner.qValues), 0)
         self.assertEqual(c.ws.max_row, 1)
+
+    def test_single_robot_does_not_move_or_train_robot_two(self):
+        c = self.controller
+        self.ui.get_robot_count.return_value = 1
+        initial = c.robotEnvironment2.getCurrentState()
+        c.step()
+        self.assertIsNone(self.client.order.call_args.args[1])
+        self.assertEqual(c.robotEnvironment2.getCurrentState(), initial)
+        self.client.is_complete.return_value = True
+        with patch.object(c.learner, 'observeTransition', wraps=c.learner.observeTransition) as update:
+            c._poll_step()
+            self.assertEqual(update.call_count, 1)
+        self.assertEqual(list(c.ws.values)[-1], (1, 3.0, 0.0))
+
+    def test_mqtt_single_and_dual_acknowledgements(self):
+        client = controlServo.__new__(controlServo)
+        client.client = Mock()
+        client.client.is_connected.return_value = True
+        client.client.publish.return_value = Mock(rc=0, mid=1)
+        client.responses = {}
+        client.response_lock = threading.Lock()
+        client.topic, client.topic2 = 'servo/angles', 'servo2/angles'
+        client.resp_topic = 'servo/crawler1_status'
+        client.resp_topic2 = 'servo2/crawler2_status'
+        client.order([(45, 'x', 2)])
+        self.assertEqual(client.client.publish.call_count, 1)
+        client.responses[client.resp_topic] = 'finish, 2'
+        self.assertTrue(client.is_complete(2))
+        self.assertNotIn('Robot 2', client.acknowledgement_details(2))
+        client.order(None, [('x', 45, 2)])
+        self.assertEqual(client.client.publish.call_args.args[0], 'servo2/angles')
+        client.responses[client.resp_topic2] = 'finish,2'
+        self.assertTrue(client.is_complete(2))
+        self.assertNotIn('Robot 1', client.acknowledgement_details(2))
+        client.order([(45, 'x', 3)], [('x', 45, 3)])
+        client.responses[client.resp_topic] = 'finish,3'
+        client.responses[client.resp_topic2] = 'finish,2'
+        self.assertFalse(client.is_complete(3))
+        self.assertIn('WRONG ID', client.acknowledgement_details(3))
+        client.responses[client.resp_topic2] = 'finish,3'
+        self.assertTrue(client.is_complete(3))
+        client.client.is_connected.return_value = False
+        count = client.client.publish.call_count
+        with self.assertRaisesRegex(RuntimeError, 'not connected'):
+            client.order([(45, 'x', 4)])
+        self.assertEqual(client.client.publish.call_count, count)
+        client.client.is_connected.return_value = True
+        client.client.publish.return_value = Mock(rc=4, mid=2)
+        with self.assertRaisesRegex(RuntimeError, 'publish failed'):
+            client.order([(45, 'x', 4)])
+
+    def test_robot_two_only_uses_marker_two_and_state_two(self):
+        c = self.controller
+        self.ui.get_robot_count.return_value = 1
+        self.ui.get_single_robot_id.return_value = 2
+        initial1 = c.robotEnvironment.getCurrentState()
+        c.step()
+        self.assertIsNone(self.client.order.call_args.args[0])
+        self.assertIsNotNone(self.client.order.call_args.args[1])
+        self.assertEqual(c.robotEnvironment.getCurrentState(), initial1)
+        expected = c.pending_step[4:7]
+        self.client.is_complete.return_value = True
+        with patch.object(c.learner, 'observeTransition') as update:
+            c._poll_step()
+            update.assert_called_once_with(*expected, -2.0)
+        self.assertEqual(list(c.ws.values)[-1], (1, 0.0, -2.0))
+        self.assertEqual(self.ui.render_analysis.call_args.args[0]['state'], c.robotEnvironment2.getCurrentState())
+    def test_connection_status_and_retained_messages(self):
+        client = controlServo.__new__(controlServo)
+        client.response_lock = threading.Lock()
+        client.broker_connected = True
+        client.last_seen, client.last_payloads, client.responses = {}, {}, {}
+        client.pending_command = None
+        client.active_response_topics = ()
+        client.timed_out_topics = set()
+        client.resp_topic, client.resp_topic2 = 'r1/status', 'r2/status'
+        self.assertEqual([r['state'] for r in client.connection_snapshot()['robots']], ['unknown', 'unknown'])
+        message = Mock(topic='r1/status', payload=b'finish,2', retain=True)
+        client.on_message(None, None, message)
+        self.assertFalse(client.last_seen)
+        message.retain = False
+        client.on_message(None, None, message)
+        self.assertEqual(client.connection_snapshot()['robots'][0]['state'], 'recent')
+        client.active_response_topics = ('r1/status', 'r2/status')
+        client.pending_command = 2
+        self.assertEqual(client.connection_snapshot()['robots'][1]['state'], 'waiting')
+        client.mark_timeout(2)
+        states = [r['state'] for r in client.connection_snapshot()['robots']]
+        self.assertEqual(states, ['recent', 'timeout'])
+        client.last_seen['r1/status'] = time.monotonic()-40
+        self.assertEqual(client.connection_snapshot()['robots'][0]['state'], 'stale')
+        client.on_disconnect(None, None, None, 0)
+        self.assertTrue(all(r['state']=='broker_offline' for r in client.connection_snapshot()['robots']))
 
     def test_timeout_pause_close_and_single_start(self):
         c = self.controller
@@ -123,7 +220,19 @@ class RefactorTests(unittest.TestCase):
             ui.show_frame(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
             self.assertEqual(len(ui.camera.find_all()), 1)
             self.assertGreater(len(ui.analysis.find_all()), 0)
+            ui.render_connections({'broker_connected': True, 'robots': [
+                {'id': 1, 'state': 'recent', 'age': 2, 'payload': 'finish,2'},
+                {'id': 2, 'state': 'unknown', 'age': None, 'payload': None}]})
+            self.assertIn('finish,2', ui.robot_labels[1].cget('text'))
+            self.assertIn('ยังไม่พบ', ui.robot_labels[2].cget('text'))
             ui.root.update_idletasks()
+            self.assertLessEqual(ui.root.winfo_reqwidth(), 1024)
+            self.assertLessEqual(ui.root.winfo_reqheight(), 720)
+            with patch.object(ui.camera, 'winfo_width', return_value=400), patch.object(ui.camera, 'winfo_height', return_value=200):
+                ui._resize_camera()
+                self.assertLessEqual(ui.photo.width(), 400)
+                self.assertLessEqual(ui.photo.height(), 200)
+                self.assertAlmostEqual(ui.photo.width()/ui.photo.height(), frame.shape[1]/frame.shape[0], places=1)
             c.close()
         except Exception:
             ui.close()

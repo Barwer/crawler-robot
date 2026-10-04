@@ -15,8 +15,14 @@ python -m venv venv
 
 Start an MQTT broker first. The current broker is configured in `servo.py`
 as `192.168.137.1:1883`; camera index 0 and marker IDs are in `read_maker.py`.
-Robot firmware topics must match `servo.py`. Run/Test requires both robots
-to acknowledge commands. A camera is required for live tracking.
+Robot firmware topics must match `servo.py`. The UI defaults to one robot;
+choose `Robots: 2` while paused for collaborative mode. Run/Test requires
+acknowledgements from all selected robots. In single mode choose Robot 1 or
+Robot 2 using the single-robot selector. Robot 1 uses `servo/angles`,
+`servo/crawler1_status` and marker ID 1. Robot 2 uses `servo2/angles`,
+`servo2/crawler2_status` and marker ID 2. Dual mode controls both.
+A camera is required for live tracking. Timeouts include the last payload
+received from each selected robot; send/receive logs appear in the terminal.
 
 ## Generate markers and run checks
 

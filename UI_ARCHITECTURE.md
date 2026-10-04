@@ -33,3 +33,13 @@ python -m unittest discover -s tests -p test_ui_refactor.py -v
 Tests cover injected camera/MQTT clients, acknowledgement waiting, marker ID reward mapping, greedy evaluation, timeout, save/load/reset, callback binding and rendering through a hidden real Tk window. They do not move physical robots or connect to a broker. Camera tests generate marker images in memory; no external image files are required.
 
 Backups of replaced files are in `backups/ui_refactor_*/`. Hardware validation remains necessary: preview, detected IDs, Run/Test, both robot acknowledgements and window shutdown.
+
+## Connection status
+
+The UI displays broker connectivity and per-robot observed MQTT replies, their
+age and last payload. Waiting and timeout are tracked independently for each
+robot. Replies older than 30 seconds are marked stale, rather than declaring
+the robot offline. Retained messages do not confirm live presence or complete
+a new command. Without firmware heartbeat or last-will presence messages,
+robots that have not published a reply remain unknown, even if powered on.
+The status panel never sends movement commands to probe connectivity.

@@ -7,7 +7,7 @@ class Application:
     def __init__(self):
         self.ui = CrawlerUI()
         try:
-            self.controller = CrawlerController(self.ui)
+            self.controller = CrawlerController(self.ui, robot_count=1)
         except Exception as error:
             self.ui.error("Startup error", str(error))
             self.ui.close()
